@@ -84,7 +84,7 @@ class ProcessReport:
     matches_total: int
     records: List[MatchInfo]
     found_counts: Counter[str]
-    missing_tokens: List[str]
+    missing_placeholders: List[str]
 
 
 class RussianHelpFormatter(argparse.RawTextHelpFormatter):
@@ -182,7 +182,7 @@ def build_replacement_spec(replacements: Mapping[str, str], ignore_case: bool) -
         if existing is not None and existing != placeholder:
             mode = "без учёта регистра" if ignore_case else "с учётом регистра"
             raise ValueError(
-                "Обнаружены неоднозначные токены для поиска "
+                "Обнаружены неоднозначные плейсхолдеры для поиска "
                 f"{mode}: {existing!r} и {placeholder!r}."
             )
         canonical_by_lookup[lookup_key] = placeholder
@@ -487,13 +487,13 @@ def scan_zip_package(src_path: Path, spec: ReplacementSpec, package_kind: str) -
     return all_records
 
 
-def convert_doc_to_docx(src_path: Path, libre_office_exec: str) -> Path:
+def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
     with tempfile.TemporaryDirectory() as tmp_dir_name:
         tmp_dir = Path(tmp_dir_name)
 
         completed = subprocess.run(
             [
-                libre_office_exec,
+                libreoffice_exec,
                 "--headless",
                 "--convert-to",
                 "docx",
@@ -569,7 +569,7 @@ def load_and_merge_replacements(json_paths: Sequence[Path]) -> Dict[str, str]:
 
     return merged
 
-def guess_libre_office_exec() -> str | None:
+def guess_libreoffice_exec() -> str | None:
     candidates: List[str] = []
 
     for name in ("soffice", "libreoffice"):
@@ -606,11 +606,11 @@ def guess_libre_office_exec() -> str | None:
     return None
 
 
-def resolve_libre_office_exec(user_value: str | None) -> str:
+def resolve_libreoffice_exec(user_value: str | None) -> str:
     if user_value:
         return user_value
 
-    detected = guess_libre_office_exec()
+    detected = guess_libreoffice_exec()
     if detected:
         return detected
 
@@ -618,7 +618,7 @@ def resolve_libre_office_exec(user_value: str | None) -> str:
         "Для обработки файлов .doc требуется LibreOffice.\n"
         "Программа не смогла автоматически найти запускаемый файл LibreOffice, "
         "необходимый для конвертации из .doc в .docx.\n"
-        "Укажите путь явно через ключ --libre-office-exec."
+        "Укажите путь явно через ключ --libreoffice-exec."
     )
 
 
@@ -636,17 +636,17 @@ def build_output_path(src_path: Path, suffix: str, in_place: bool, force_ext: st
 
 def build_process_report(output_path: Path | None, records: List[MatchInfo], spec: ReplacementSpec) -> ProcessReport:
     found_counts: Counter[str] = Counter(match.canonical_placeholder for match in records)
-    missing_tokens = [placeholder for placeholder in spec.all_placeholders if placeholder not in found_counts]
+    missing_placeholders = [placeholder for placeholder in spec.all_placeholders if placeholder not in found_counts]
     return ProcessReport(
         output_path=output_path,
         matches_total=len(records),
         records=records,
         found_counts=found_counts,
-        missing_tokens=missing_tokens,
+        missing_placeholders=missing_placeholders,
     )
 
 
-def check_one_file(src_path: Path, spec: ReplacementSpec, libre_office_exec: str | None) -> ProcessReport:
+def check_one_file(src_path: Path, spec: ReplacementSpec, libreoffice_exec: str | None) -> ProcessReport:
     ext = src_path.suffix.lower()
 
     if ext == ".docx":
@@ -658,7 +658,7 @@ def check_one_file(src_path: Path, spec: ReplacementSpec, libre_office_exec: str
         return build_process_report(None, records, spec)
 
     if ext == ".doc":
-        temp_docx = convert_doc_to_docx(src_path, resolve_libre_office_exec(libre_office_exec))
+        temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
         try:
             records = scan_zip_package(temp_docx, spec, "docx")
             return build_process_report(None, records, spec)
@@ -675,7 +675,7 @@ def process_one_file(
     spec: ReplacementSpec,
     suffix: str,
     in_place: bool,
-    libre_office_exec: str | None,
+    libreoffice_exec: str | None,
 ) -> ProcessReport:
     ext = src_path.suffix.lower()
 
@@ -696,7 +696,7 @@ def process_one_file(
                 "конвертируется в .docx."
             )
 
-        temp_docx = convert_doc_to_docx(src_path, resolve_libre_office_exec(libre_office_exec))
+        temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
         try:
             dst_path = build_output_path(src_path, suffix, False, ".docx")
             records = rewrite_zip_package(temp_docx, dst_path, spec, "docx")
@@ -723,15 +723,15 @@ def print_check_report(src_path: Path, report: ProcessReport, verbose: bool) -> 
     print(
         f"[CHECK] {src_path}: совпадений={report.matches_total}, "
         f"уникальных_найдено={len(report.found_counts)}, "
-        f"уникальных_не_найдено={len(report.missing_tokens)}"
+        f"уникальных_не_найдено={len(report.missing_placeholders)}"
     )
 
     if verbose:
         print_verbose_replacements(report.records)
         print("  Не найдены:")
-        if report.missing_tokens:
-            for token in report.missing_tokens:
-                print(f"    {token}")
+        if report.missing_placeholders:
+            for placeholder in report.missing_placeholders:
+                print(f"    {placeholder}")
         else:
             print("    нет")
 
@@ -760,13 +760,13 @@ def make_parser() -> argparse.ArgumentParser:
         formatter_class=RussianHelpFormatter,
         usage=(
             "%(prog)s [--ignore-case] [--check] [-v|--verbose] [--suffix SUFFIX] "
-            "[--in-place] [--libre-office-exec LIBRE_OFFICE_EXEC] input_file [input_file ...]"
+            "[--in-place] [--libreoffice-exec LIBREOFFICE_EXEC] input_file [input_file ...]"
         ),
         description=(
             "Подставляет значения из одного или нескольких JSON-файлов в документы .docx и .odt,\n"
             "а старые .doc обрабатывает через промежуточную конвертацию в .docx.\n\n"
             "JSON-файлы распознаются по расширению .json. Например, файл\n"
-            "ООО_Ромашка.docfill.json подходит, потому что его последнее расширение — .json.\n\n"
+            "\"ООО_Ромашка.docfill.json\" подходит, потому что его последнее расширение — .json.\n\n"
             "Плейсхолдер — это заменяемый текст в документе.\n"
             "Плейсхолдеры строятся из иерархии JSON-ключей через точку, например:\n"
             "ООО_Ромашка.Адрес.Юридический"
@@ -774,12 +774,12 @@ def make_parser() -> argparse.ArgumentParser:
         epilog=(
             "Примеры:\n"
             f"  {prog_name} data.json contract.docx letter.odt\n"
-            f"  {prog_name} company.docfill.json bank.json contract.docx\n"
+            f"  {prog_name} company.json bank.json contract.docx\n"
             f"  {prog_name} --ignore-case data.json contract.docx\n"
             f"  {prog_name} --check data.json bank.json contract.docx letter.odt\n"
             f"  {prog_name} -v data.json contract.docx\n"
             f"  {prog_name} --suffix .filled data.json a.docx b.odt\n"
-            f"  {prog_name} --libre-office-exec \"C:\\Program Files\\LibreOffice\\program\\soffice.exe\" data.json legacy.doc\n"
+            f"  {prog_name} --libreoffice-exec \"C:\\Program Files\\LibreOffice\\program\\soffice.exe\" data.json legacy.doc\n"
         ),
     )
     parser.add_argument(
@@ -793,9 +793,8 @@ def make_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="input_file",
         help=(
-            "Один или несколько входных файлов. JSON-файлы должны иметь расширение .json\n"
-            "и используются как источники плейсхолдеров, а файлы .doc, .docx\n"
-            "и .odt — как документы для обработки."
+            "Один или несколько входных файлов. JSON-файлы используются как источники\n"
+            "плейсхолдеров, а файлы .doc, .docx и .odt — как документы для обработки."
         ),
     )
     parser.add_argument(
@@ -837,8 +836,8 @@ def make_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--libre-office-exec",
-        dest="libre_office_exec",
+        "--libreoffice-exec",
+        dest="libreoffice_exec",
         help=(
             "Команда или путь к запускаемому файлу LibreOffice. Нужен только\n"
             "для файлов формата .doc и только если программе не удалось\n"
@@ -904,7 +903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for src_path in document_paths:
         try:
             if args.check:
-                report = check_one_file(src_path, spec, args.libre_office_exec)
+                report = check_one_file(src_path, spec, args.libreoffice_exec)
                 print_check_report(src_path, report, args.verbose)
             else:
                 report = process_one_file(
@@ -912,7 +911,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     spec=spec,
                     suffix=args.suffix,
                     in_place=args.in_place,
-                    libre_office_exec=args.libre_office_exec,
+                    libreoffice_exec=args.libreoffice_exec,
                 )
                 print_process_report(src_path, report, args.verbose, args.in_place)
         except Exception as exc:
