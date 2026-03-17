@@ -84,7 +84,7 @@ class ProcessReport:
     matches_total: int
     records: List[MatchInfo]
     found_counts: Counter[str]
-    missing_placeholders: List[str]
+    missing_tokens: List[str]
 
 
 class RussianHelpFormatter(argparse.RawTextHelpFormatter):
@@ -168,7 +168,7 @@ def flatten_json(value, prefix: str = "") -> Dict[str, str]:
     return result
 
 
-def build_placeholder_spec(replacements: Mapping[str, str], ignore_case: bool) -> ReplacementSpec:
+def build_replacement_spec(replacements: Mapping[str, str], ignore_case: bool) -> ReplacementSpec:
     placeholders = [placeholder for placeholder in replacements.keys() if placeholder]
     if not placeholders:
         return ReplacementSpec(None, {}, {}, ignore_case, [])
@@ -182,7 +182,7 @@ def build_placeholder_spec(replacements: Mapping[str, str], ignore_case: bool) -
         if existing is not None and existing != placeholder:
             mode = "без учёта регистра" if ignore_case else "с учётом регистра"
             raise ValueError(
-                "Обнаружены неоднозначные плейсхолдеры для поиска "
+                "Обнаружены неоднозначные токены для поиска "
                 f"{mode}: {existing!r} и {placeholder!r}."
             )
         canonical_by_lookup[lookup_key] = placeholder
@@ -528,16 +528,46 @@ def convert_doc_to_docx(src_path: Path, libre_office_exec: str) -> Path:
         return persistent_path
 
 
+
+
 def load_replacements(json_path: Path) -> Dict[str, str]:
     with json_path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
     replacements = flatten_json(data)
     if not replacements:
-        raise ValueError("В JSON не найдено скалярных значений для подстановки.")
+        raise ValueError(
+            f"В JSON-файле {json_path} не найдено скалярных значений для подстановки."
+        )
 
     return replacements
 
+
+def load_and_merge_replacements(json_paths: Sequence[Path]) -> Dict[str, str]:
+    merged: Dict[str, str] = {}
+    source_by_placeholder: Dict[str, Path] = {}
+
+    for json_path in json_paths:
+        replacements = load_replacements(json_path)
+
+        for placeholder, value in replacements.items():
+            existing_value = merged.get(placeholder)
+            if existing_value is None:
+                merged[placeholder] = value
+                source_by_placeholder[placeholder] = json_path
+                continue
+
+            if existing_value != value:
+                first_source = source_by_placeholder[placeholder]
+                raise ValueError(
+                    "Обнаружен конфликт плейсхолдеров между JSON-файлами: "
+                    f"{placeholder!r} имеет разные значения в {first_source} и {json_path}."
+                )
+
+    if not merged:
+        raise ValueError("Не найдено плейсхолдеров для подстановки ни в одном JSON-файле.")
+
+    return merged
 
 def guess_libre_office_exec() -> str | None:
     candidates: List[str] = []
@@ -606,13 +636,13 @@ def build_output_path(src_path: Path, suffix: str, in_place: bool, force_ext: st
 
 def build_process_report(output_path: Path | None, records: List[MatchInfo], spec: ReplacementSpec) -> ProcessReport:
     found_counts: Counter[str] = Counter(match.canonical_placeholder for match in records)
-    missing_placeholders = [placeholder for placeholder in spec.all_placeholders if placeholder not in found_counts]
+    missing_tokens = [placeholder for placeholder in spec.all_placeholders if placeholder not in found_counts]
     return ProcessReport(
         output_path=output_path,
         matches_total=len(records),
         records=records,
         found_counts=found_counts,
-        missing_placeholders=missing_placeholders,
+        missing_tokens=missing_tokens,
     )
 
 
@@ -693,15 +723,15 @@ def print_check_report(src_path: Path, report: ProcessReport, verbose: bool) -> 
     print(
         f"[CHECK] {src_path}: совпадений={report.matches_total}, "
         f"уникальных_найдено={len(report.found_counts)}, "
-        f"уникальных_не_найдено={len(report.missing_placeholders)}"
+        f"уникальных_не_найдено={len(report.missing_tokens)}"
     )
 
     if verbose:
         print_verbose_replacements(report.records)
         print("  Не найдены:")
-        if report.missing_placeholders:
-            for placeholder in report.missing_placeholders:
-                print(f"    {placeholder}")
+        if report.missing_tokens:
+            for token in report.missing_tokens:
+                print(f"    {token}")
         else:
             print("    нет")
 
@@ -719,6 +749,8 @@ def print_process_report(src_path: Path, report: ProcessReport, verbose: bool, i
         print_verbose_replacements(report.records)
 
 
+
+
 def make_parser() -> argparse.ArgumentParser:
     prog_name = Path(os.path.basename(sys.argv[0] if sys.argv else "docfill.py")).name or "docfill.py"
 
@@ -728,20 +760,23 @@ def make_parser() -> argparse.ArgumentParser:
         formatter_class=RussianHelpFormatter,
         usage=(
             "%(prog)s [--ignore-case] [--check] [-v|--verbose] [--suffix SUFFIX] "
-            "[--in-place] [--libre-office-exec LIBRE_OFFICE_EXEC] placeholders_json document [document ...]"
+            "[--in-place] [--libre-office-exec LIBRE_OFFICE_EXEC] input_file [input_file ...]"
         ),
         description=(
-            "Подставляет значения из JSON в документы .docx и .odt, а старые .doc\n"
-            "обрабатывает через промежуточную конвертацию в .docx.\n\n"
+            "Подставляет значения из одного или нескольких JSON-файлов в документы .docx и .odt,\n"
+            "а старые .doc обрабатывает через промежуточную конвертацию в .docx.\n\n"
+            "JSON-файлы распознаются по расширению .json. Например, файл\n"
+            "ООО_Ромашка.docfill.json подходит, потому что его последнее расширение — .json.\n\n"
+            "Плейсхолдер — это заменяемый текст в документе.\n"
             "Плейсхолдеры строятся из иерархии JSON-ключей через точку, например:\n"
-            "ООО_Ромашка.Руководитель.Должность.Именительный\n\n"
-            "Плейсхолдер — это заменяемый текст в документе."
+            "ООО_Ромашка.Адрес.Юридический"
         ),
         epilog=(
             "Примеры:\n"
             f"  {prog_name} data.json contract.docx letter.odt\n"
+            f"  {prog_name} company.docfill.json bank.json contract.docx\n"
             f"  {prog_name} --ignore-case data.json contract.docx\n"
-            f"  {prog_name} --check data.json contract.docx letter.odt\n"
+            f"  {prog_name} --check data.json bank.json contract.docx letter.odt\n"
             f"  {prog_name} -v data.json contract.docx\n"
             f"  {prog_name} --suffix .filled data.json a.docx b.odt\n"
             f"  {prog_name} --libre-office-exec \"C:\\Program Files\\LibreOffice\\program\\soffice.exe\" data.json legacy.doc\n"
@@ -754,21 +789,21 @@ def make_parser() -> argparse.ArgumentParser:
         help="Показать эту справку и выйти.",
     )
     parser.add_argument(
-        "json_file",
-        help="Путь к JSON-файлу со значениями плейсхолдеров.",
-    )
-    parser.add_argument(
-        "documents",
+        "input_files",
         nargs="+",
-        metavar="document",
-        help="Один или несколько файлов .doc, .docx или .odt.",
+        metavar="input_file",
+        help=(
+            "Один или несколько входных файлов. JSON-файлы должны иметь расширение .json\n"
+            "и используются как источники плейсхолдеров, а файлы .doc, .docx\n"
+            "и .odt — как документы для обработки."
+        ),
     )
     parser.add_argument(
         "--ignore-case",
         action="store_true",
         help=(
             "Искать плейсхолдеры без учёта регистра. Если в JSON есть плейсхолдеры,\n"
-            "отличающиеся только регистром, программа выдаст ошибку и завершится."
+            "отличающиеся только регистром, программа завершится с ошибкой."
         ),
     )
     parser.add_argument(
@@ -814,32 +849,59 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = make_parser()
     args = parser.parse_args(argv)
 
-    json_path = Path(args.json_file)
-    if not json_path.is_file():
-        print(f"JSON-файл не найден: {json_path}", file=sys.stderr)
+    input_paths = [Path(item) for item in args.input_files]
+    json_paths = [path for path in input_paths if path.suffix.lower() == ".json"]
+    document_paths = [path for path in input_paths if path.suffix.lower() in {".doc", ".docx", ".odt"}]
+    unsupported_paths = [
+        path for path in input_paths
+        if path.suffix.lower() not in {".json", ".doc", ".docx", ".odt"}
+    ]
+
+    if unsupported_paths:
+        for path in unsupported_paths:
+            print(
+                f"Неподдерживаемый входной файл: {path}. "
+                "Поддерживаются только .json, .doc, .docx и .odt.",
+                file=sys.stderr,
+            )
+        return 1
+
+    if not json_paths:
+        print(
+            "Не указан ни один JSON-файл со значениями плейсхолдеров.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not document_paths:
+        print(
+            "Не указан ни один документ для обработки. "
+            "Передайте хотя бы один файл .doc, .docx или .odt.",
+            file=sys.stderr,
+        )
+        return 1
+
+    missing_inputs = [path for path in input_paths if not path.is_file()]
+    if missing_inputs:
+        for path in missing_inputs:
+            print(f"[ERROR] Файл не найден: {path}", file=sys.stderr)
         return 1
 
     try:
-        replacements = load_replacements(json_path)
-        spec = build_placeholder_spec(replacements, args.ignore_case)
+        replacements = load_and_merge_replacements(json_paths)
+        spec = build_replacement_spec(replacements, args.ignore_case)
     except Exception as exc:
         print(f"Ошибка подготовки плейсхолдеров: {exc}", file=sys.stderr)
         return 1
 
     failures = 0
 
-    for doc_name in args.documents:
-        src_path = Path(doc_name)
-
-        if not src_path.is_file():
-            print(f"[ERROR] Файл не найден: {src_path}", file=sys.stderr)
-            failures += 1
-            continue
-
+    for src_path in document_paths:
         try:
             if args.check:
                 report = check_one_file(src_path, spec, args.libre_office_exec)
@@ -858,7 +920,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             failures += 1
 
     return 1 if failures else 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
