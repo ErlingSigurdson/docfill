@@ -139,7 +139,7 @@ class DocfillLauncher(tk.Tk):
         self._build_file_list(
             parent=files_frame,
             column=0,
-            title="JSON-файлы с плейсхолдерами",
+            title="JSON-файлы",
             add_command=self._add_json_files,
             remove_command=lambda: self._remove_selected(self.json_listbox),
             clear_command=lambda: self._clear_list(self.json_listbox),
