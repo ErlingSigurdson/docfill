@@ -509,7 +509,7 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
 
         if completed.returncode != 0:
             raise RuntimeError(
-                "Не удалось конвертировать .doc через LibreOffice.\n"
+                "Не удалось конвертировать .doc с помощью LibreOffice.\n"
                 f"Команда завершилась с кодом {completed.returncode}.\n"
                 f"stdout:\n{completed.stdout}\n"
                 f"stderr:\n{completed.stderr}"
@@ -518,7 +518,7 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
         converted = tmp_dir / f"{src_path.stem}.docx"
         if not converted.exists():
             raise RuntimeError(
-                "LibreOffice завершился без ошибки, но результирующий .docx не найден."
+                "LibreOffice завершил работу без ошибки, но итоговый файл в формате DOCX не найден."
             )
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
@@ -615,10 +615,10 @@ def resolve_libreoffice_exec(user_value: str | None) -> str:
         return detected
 
     raise RuntimeError(
-        "Для обработки файлов .doc требуется LibreOffice.\n"
+        "Для обработки файлов в формате DOC (как правило, имеют расширение '.doc') требуется LibreOffice.\n"
         "Программа не смогла автоматически найти запускаемый файл LibreOffice, "
-        "необходимый для конвертации из .doc в .docx.\n"
-        "Укажите путь явно через ключ --libreoffice-exec."
+        "необходимый для конвертации из DOC в DOCX.\n"
+        "Укажите путь к исполняемому файлу LibreOffice напрямую с помощью ключа --libreoffice-exec."
     )
 
 
@@ -666,7 +666,7 @@ def check_one_file(src_path: Path, spec: ReplacementSpec, libreoffice_exec: str 
             temp_docx.unlink(missing_ok=True)
 
     raise ValueError(
-        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только .doc, .docx и .odt."
+        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT и DOC."
     )
 
 
@@ -692,8 +692,8 @@ def process_one_file(
     if ext == ".doc":
         if in_place:
             raise ValueError(
-                "Режим --in-place не поддерживается для .doc: старый бинарный формат "
-                "конвертируется в .docx."
+                "Режим --in-place не поддерживается для DOC."
+                "Создаётся копия файла в формате DOCX."
             )
 
         temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
@@ -705,7 +705,7 @@ def process_one_file(
             temp_docx.unlink(missing_ok=True)
 
     raise ValueError(
-        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только .doc, .docx и .odt."
+        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT и DOC."
     )
 
 
@@ -760,26 +760,11 @@ def make_parser() -> argparse.ArgumentParser:
         formatter_class=RussianHelpFormatter,
         usage=(
             "%(prog)s [--ignore-case] [--check] [-v|--verbose] [--suffix SUFFIX] "
-            "[--in-place] [--libreoffice-exec LIBREOFFICE_EXEC] input_file [input_file ...]"
+            "[--in-place] [--libreoffice-exec LIBREOFFICE_EXEC] target_file [target_file ...]"
         ),
         description=(
-            "Подставляет значения из одного или нескольких JSON-файлов в документы .docx и .odt,\n"
-            "а старые .doc обрабатывает через промежуточную конвертацию в .docx.\n\n"
-            "JSON-файлы распознаются по расширению .json. Например, файл\n"
-            "\"ООО_Ромашка.docfill.json\" подходит, потому что его последнее расширение — .json.\n\n"
-            "Плейсхолдер — это заменяемый текст в документе.\n"
-            "Плейсхолдеры строятся из иерархии JSON-ключей через точку, например:\n"
-            "ООО_Ромашка.Адрес.Юридический"
-        ),
-        epilog=(
-            "Примеры:\n"
-            f"  {prog_name} data.json contract.docx letter.odt\n"
-            f"  {prog_name} company.json bank.json contract.docx\n"
-            f"  {prog_name} --ignore-case data.json contract.docx\n"
-            f"  {prog_name} --check data.json bank.json contract.docx letter.odt\n"
-            f"  {prog_name} -v data.json contract.docx\n"
-            f"  {prog_name} --suffix .filled data.json a.docx b.odt\n"
-            f"  {prog_name} --libreoffice-exec \"C:\\Program Files\\LibreOffice\\program\\soffice.exe\" data.json legacy.doc\n"
+            "Подставляет значения из одного или нескольких JSON-файлов в один или несколько документов в формате DOCX, ODT или DOC.\n"
+            "JSON-файлы распознаются по расширению .json.\n"
         ),
     )
     parser.add_argument(
@@ -793,8 +778,8 @@ def make_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="input_file",
         help=(
-            "Один или несколько входных файлов. JSON-файлы используются как источники\n"
-            "плейсхолдеров, а файлы .doc, .docx и .odt — как документы для обработки."
+            "Один или несколько целевых файлов. JSON-файлы используются как источники\n"
+            "данных, а файлы .doc, .docx и .odt — как документы, в которых выполняется подстановка."
         ),
     )
     parser.add_argument(
@@ -831,7 +816,7 @@ def make_parser() -> argparse.ArgumentParser:
         "--in-place",
         action="store_true",
         help=(
-            "Перезаписывать исходные .docx и .odt на месте. Для .doc\n"
+            "Выполнять подстановку непосредственно в целевых файлах .docx и .odt, а не создавать для этого их копии. Для .doc\n"
             "не поддерживается."
         ),
     )
