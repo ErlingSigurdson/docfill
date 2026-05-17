@@ -32,9 +32,10 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 XML_SPACE_ATTR = f"{{{XML_NS}}}space"
 
 JSON_EXTENSION = ".json"
-DOCUMENT_EXTENSIONS = {".doc", ".docx", ".odt", ".rtf"}
+NATIVE_DOCUMENT_EXTENSIONS = {".docx", ".odt"}
 CONVERTED_TO_DOCX_EXTENSIONS = {".doc", ".rtf"}
-SUPPORTED_INPUT_EXTENSIONS = {JSON_EXTENSION, *DOCUMENT_EXTENSIONS}
+DOCUMENT_EXTENSIONS = NATIVE_DOCUMENT_EXTENSIONS | CONVERTED_TO_DOCX_EXTENSIONS
+SUPPORTED_INPUT_EXTENSIONS = {JSON_EXTENSION} | DOCUMENT_EXTENSIONS
 
 for prefix, uri in DOCX_NS.items():
     ET.register_namespace(prefix, uri)
@@ -585,6 +586,17 @@ def load_and_merge_replacements(json_paths: Sequence[Path]) -> Dict[str, str]:
     return merged
 
 
+def strip_accidental_argument_quotes(value: str) -> str:
+    """Remove shell/GUI quote characters that accidentally reached argparse.
+
+    Normal shells usually strip grouping quotes before Python sees argv, but the
+    GUI has to parse its free-form "additional arguments" field itself. This
+    makes --alias tolerant of values like '"A=B,C=D"' accidentally arriving
+    with the quote characters still present.
+    """
+    return value.strip().strip('\"\'')
+
+
 def parse_alias_pairs(alias_values: Sequence[str]) -> List[tuple[str, str]]:
     pairs: List[tuple[str, str]] = []
 
@@ -601,8 +613,8 @@ def parse_alias_pairs(alias_values: Sequence[str]) -> List[tuple[str, str]]:
                 )
 
             source_prefix, alias_prefix = item.split("=", 1)
-            source_prefix = source_prefix.strip()
-            alias_prefix = alias_prefix.strip()
+            source_prefix = strip_accidental_argument_quotes(source_prefix)
+            alias_prefix = strip_accidental_argument_quotes(alias_prefix)
 
             if not source_prefix or not alias_prefix:
                 raise ValueError(
@@ -927,7 +939,7 @@ def make_parser() -> argparse.ArgumentParser:
         dest="libreoffice_exec",
         help=(
             "Команда или путь к запускаемому файлу LibreOffice. Нужен только\n"
-            "для файлов формата .doc и .rtf и только если программе не удалось\n"
+            "для файлов форматов .doc и .rtf и только если программе не удалось\n"
             "самостоятельно найти LibreOffice, необходимый для конвертации\n"
             "в .docx."
         ),
@@ -941,7 +953,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     input_paths = [Path(item) for item in args.input_files]
-    json_paths = [path for path in input_paths if path.suffix.lower() == ".json"]
+    json_paths = [path for path in input_paths if path.suffix.lower() == JSON_EXTENSION]
     document_paths = [path for path in input_paths if path.suffix.lower() in DOCUMENT_EXTENSIONS]
     unsupported_paths = [
         path for path in input_paths

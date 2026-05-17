@@ -287,12 +287,35 @@ class DocfillLauncher(tk.Tk):
             return value
         return shlex.quote(value)
 
+    def _split_windows_command_line(self, text: str) -> list[str]:
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception as exc:
+            raise ValueError(f"не удалось загрузить Windows parser: {exc}") from exc
+
+        argc = ctypes.c_int()
+        command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+        command_line_to_argv.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+        command_line_to_argv.restype = ctypes.POINTER(wintypes.LPWSTR)
+
+        argv = command_line_to_argv(text, ctypes.byref(argc))
+        if not argv:
+            raise ValueError("Windows не смог разобрать строку аргументов.")
+
+        try:
+            return [argv[index] for index in range(argc.value)]
+        finally:
+            ctypes.windll.kernel32.LocalFree(argv)
+
     def _parse_extra_args(self) -> list[str]:
         text = self.extra_args_var.get().strip()
         if not text:
             return []
         try:
-            return shlex.split(text, posix=(os.name != "nt"))
+            if os.name == "nt":
+                return self._split_windows_command_line(text)
+            return shlex.split(text, posix=True)
         except ValueError as exc:
             raise ValueError(f"Не удалось разобрать дополнительные аргументы: {exc}") from exc
 
