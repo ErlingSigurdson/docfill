@@ -31,6 +31,11 @@ ODT_NS = {
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 XML_SPACE_ATTR = f"{{{XML_NS}}}space"
 
+JSON_EXTENSION = ".json"
+DOCUMENT_EXTENSIONS = {".doc", ".docx", ".odt", ".rtf"}
+CONVERTED_TO_DOCX_EXTENSIONS = {".doc", ".rtf"}
+SUPPORTED_INPUT_EXTENSIONS = {JSON_EXTENSION, *DOCUMENT_EXTENSIONS}
+
 for prefix, uri in DOCX_NS.items():
     ET.register_namespace(prefix, uri)
 
@@ -487,7 +492,9 @@ def scan_zip_package(src_path: Path, spec: ReplacementSpec, package_kind: str) -
     return all_records
 
 
-def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
+def convert_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
+    src_ext = src_path.suffix.lower() or "файл"
+
     with tempfile.TemporaryDirectory() as tmp_dir_name:
         tmp_dir = Path(tmp_dir_name)
 
@@ -509,7 +516,7 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
 
         if completed.returncode != 0:
             raise RuntimeError(
-                "Не удалось конвертировать .doc с помощью LibreOffice.\n"
+                f"Не удалось конвертировать {src_ext} с помощью LibreOffice.\n"
                 f"Команда завершилась с кодом {completed.returncode}.\n"
                 f"stdout:\n{completed.stdout}\n"
                 f"stderr:\n{completed.stderr}"
@@ -517,9 +524,14 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
 
         converted = tmp_dir / f"{src_path.stem}.docx"
         if not converted.exists():
-            raise RuntimeError(
-                "LibreOffice завершил работу без ошибки, но итоговый файл в формате DOCX не найден."
-            )
+            converted_candidates = list(tmp_dir.glob("*.docx"))
+            if len(converted_candidates) == 1:
+                converted = converted_candidates[0]
+            else:
+                raise RuntimeError(
+                    "LibreOffice завершил работу без ошибки, но итоговый файл "
+                    "в формате DOCX не найден."
+                )
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             persistent_path = Path(tmp_file.name)
@@ -527,6 +539,9 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
         shutil.copyfile(converted, persistent_path)
         return persistent_path
 
+
+def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
+    return convert_to_docx(src_path, libreoffice_exec)
 
 
 
@@ -692,9 +707,9 @@ def resolve_libreoffice_exec(user_value: str | None) -> str:
         return detected
 
     raise RuntimeError(
-        "Для обработки файлов в формате DOC (как правило, имеют расширение '.doc') требуется LibreOffice.\n"
+        "Для обработки файлов в форматах DOC и RTF требуется LibreOffice.\n"
         "Программа не смогла автоматически найти запускаемый файл LibreOffice, "
-        "необходимый для конвертации из DOC в DOCX.\n"
+        "необходимый для конвертации в DOCX.\n"
         "Укажите путь к исполняемому файлу LibreOffice или его имя напрямую с помощью ключа --libreoffice-exec."
     )
 
@@ -734,8 +749,8 @@ def check_one_file(src_path: Path, spec: ReplacementSpec, libreoffice_exec: str 
         records = scan_zip_package(src_path, spec, "odt")
         return build_process_report(None, records, spec)
 
-    if ext == ".doc":
-        temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
+    if ext in CONVERTED_TO_DOCX_EXTENSIONS:
+        temp_docx = convert_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
         try:
             records = scan_zip_package(temp_docx, spec, "docx")
             return build_process_report(None, records, spec)
@@ -743,7 +758,7 @@ def check_one_file(src_path: Path, spec: ReplacementSpec, libreoffice_exec: str 
             temp_docx.unlink(missing_ok=True)
 
     raise ValueError(
-        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT и DOC."
+        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT, DOC и RTF."
     )
 
 
@@ -766,13 +781,13 @@ def process_one_file(
         records = rewrite_zip_package(src_path, dst_path, spec, "odt")
         return build_process_report(dst_path, records, spec)
 
-    if ext == ".doc":
+    if ext in CONVERTED_TO_DOCX_EXTENSIONS:
         if in_place:
             raise ValueError(
-                "Опция --in-place не поддерживается для DOC."
+                "Опция --in-place не поддерживается для DOC и RTF."
             )
 
-        temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
+        temp_docx = convert_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
         try:
             dst_path = build_output_path(src_path, suffix, False, ".docx")
             records = rewrite_zip_package(temp_docx, dst_path, spec, "docx")
@@ -781,7 +796,7 @@ def process_one_file(
             temp_docx.unlink(missing_ok=True)
 
     raise ValueError(
-        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT и DOC."
+        f"Неподдерживаемый формат: {src_path.name}. Поддерживаются только DOCX, ODT, DOC и RTF."
     )
 
 
@@ -841,7 +856,7 @@ def make_parser() -> argparse.ArgumentParser:
         ),
         description=(
             "Подставляет значения из одного или нескольких JSON-файлов в один или несколько документов\n"
-            "в формате DOCX, ODT или DOC. JSON-файлы распознаются по расширению .json.\n"
+            "в формате DOCX, ODT, DOC или RTF. JSON-файлы распознаются по расширению .json.\n"
         ),
     )
     parser.add_argument(
@@ -856,7 +871,7 @@ def make_parser() -> argparse.ArgumentParser:
         metavar="input_file",
         help=(
             "Один или несколько целевых файлов. JSON-файлы используются как источники данных,\n"
-            "а целевые файлы .doc, .docx и .odt — как документы, в которых выполняется подстановка."
+            "а целевые файлы .doc, .docx, .odt и .rtf — как документы, в которых выполняется подстановка."
         ),
     )
     parser.add_argument(
@@ -894,7 +909,7 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Выполнять подстановку непосредственно в целевых файлах .docx и .odt, а не создавать для этого их копии. Для .doc\n"
-            "не поддерживается."
+            "и .rtf не поддерживается."
         ),
     )
 
@@ -912,9 +927,9 @@ def make_parser() -> argparse.ArgumentParser:
         dest="libreoffice_exec",
         help=(
             "Команда или путь к запускаемому файлу LibreOffice. Нужен только\n"
-            "для файлов формата .doc и только если программе не удалось\n"
+            "для файлов формата .doc и .rtf и только если программе не удалось\n"
             "самостоятельно найти LibreOffice, необходимый для конвертации\n"
-            "из .doc в .docx."
+            "в .docx."
         ),
     )
     return parser
@@ -927,17 +942,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     input_paths = [Path(item) for item in args.input_files]
     json_paths = [path for path in input_paths if path.suffix.lower() == ".json"]
-    document_paths = [path for path in input_paths if path.suffix.lower() in {".doc", ".docx", ".odt"}]
+    document_paths = [path for path in input_paths if path.suffix.lower() in DOCUMENT_EXTENSIONS]
     unsupported_paths = [
         path for path in input_paths
-        if path.suffix.lower() not in {".json", ".doc", ".docx", ".odt"}
+        if path.suffix.lower() not in SUPPORTED_INPUT_EXTENSIONS
     ]
 
     if unsupported_paths:
         for path in unsupported_paths:
             print(
                 f"Неподдерживаемый входной файл: {path}. "
-                "Поддерживаются только .json, .doc, .docx и .odt.",
+                "Поддерживаются только .json, .doc, .docx, .odt и .rtf.",
                 file=sys.stderr,
             )
         return 1
@@ -952,7 +967,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not document_paths:
         print(
             "Не указан ни один документ для обработки. "
-            "Передайте хотя бы один файл .doc, .docx или .odt.",
+            "Передайте хотя бы один файл .doc, .docx, .odt или .rtf.",
             file=sys.stderr,
         )
         return 1

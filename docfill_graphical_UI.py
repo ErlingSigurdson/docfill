@@ -11,7 +11,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-DOC_EXTENSIONS = {".doc", ".docx", ".odt"}
+DOC_EXTENSIONS = {".doc", ".docx", ".odt", ".rtf"}
 JSON_EXTENSION = ".json"
 
 
@@ -243,7 +243,7 @@ class DocfillLauncher(tk.Tk):
     def _add_document_files(self) -> None:
         paths = filedialog.askopenfilenames(
             title="Выберите документы",
-            filetypes=[("Supported documents", "*.doc *.docx *.odt"), ("All files", "*.*")],
+            filetypes=[("Supported documents", "*.doc *.docx *.odt *.rtf"), ("All files", "*.*")],
         )
         self._add_paths(self.doc_listbox, paths, required_suffixes=DOC_EXTENSIONS)
 
