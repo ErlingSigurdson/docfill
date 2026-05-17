@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Tkinter GUI launcher for docfill.
-
-This launcher is a thin GUI wrapper around docfill.py. It helps choose
-JSON/files and run the CLI utility without typing the command manually.
-"""
 from __future__ import annotations
 
 import os
@@ -20,100 +15,126 @@ DOC_EXTENSIONS = {".doc", ".docx", ".odt"}
 JSON_EXTENSION = ".json"
 
 
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.v_scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.v_scroll.set)
+
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.v_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.content = ttk.Frame(self.canvas)
+        self.content.columnconfigure(0, weight=1)
+
+        self.window_id = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+
+        self.content.bind("<Configure>", self._on_content_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel_linux, add="+")
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel_linux, add="+")
+
+    def _on_content_configure(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self.window_id, width=event.width)
+
+    def _on_mousewheel(self, event):
+        try:
+            delta = int(-event.delta / 120)
+        except Exception:
+            return
+        if delta:
+            self.canvas.yview_scroll(delta, "units")
+
+    def _on_mousewheel_linux(self, event):
+        if getattr(event, "num", None) == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif getattr(event, "num", None) == 5:
+            self.canvas.yview_scroll(1, "units")
+
+
 class DocfillLauncher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("docfill launcher")
-        self.minsize(840, 580)
+        self._configure_initial_geometry()
 
         self.python_path_var = tk.StringVar(value=self._guess_python_executable())
         self.docfill_path_var = tk.StringVar(value=self._guess_docfill_script())
         self.suffix_var = tk.StringVar(value=".rendered")
-        self.libre_office_exec_var = tk.StringVar()
+        self.libreoffice_exec_var = tk.StringVar()
         self.extra_args_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Готово.")
         self.verbose_var = tk.BooleanVar(value=False)
         self.check_var = tk.BooleanVar(value=False)
         self.ignore_case_var = tk.BooleanVar(value=False)
         self.in_place_var = tk.BooleanVar(value=False)
+
         self.running = False
         self.process: subprocess.Popen[str] | None = None
 
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.scroller = ScrollableFrame(self)
+        self.scroller.grid(row=0, column=0, sticky="nsew")
+
         self._build_ui()
-        self._configure_window_geometry()
-        self._update_command_preview()
 
-
-    def _configure_window_geometry(self) -> None:
+    def _configure_initial_geometry(self) -> None:
         self.update_idletasks()
-
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-
-        target_w = min(max(self.winfo_reqwidth() + 20, 900), max(640, int(screen_w * 0.92)))
-        target_h = min(max(self.winfo_reqheight() + 20, 620), max(480, int(screen_h * 0.85)))
-
-        x = max((screen_w - target_w) // 2, 0)
-        y = max((screen_h - target_h) // 3, 0)
-
-        self.maxsize(screen_w, screen_h)
-        self.geometry(f"{target_w}x{target_h}+{x}+{y}")
+        sw = max(800, self.winfo_screenwidth())
+        sh = max(600, self.winfo_screenheight())
+        width = min(1040, max(820, int(sw * 0.82)))
+        height = min(820, max(620, int(sh * 0.82)))
+        self.geometry(f"{width}x{height}")
+        self.minsize(760, 560)
 
     def _guess_python_executable(self) -> str:
         return sys.executable or "python"
 
     def _guess_docfill_script(self) -> str:
         candidates = []
-
         try:
             here = Path(__file__).resolve().parent
             candidates.append(here / "docfill.py")
         except Exception:
             pass
-
-        cwd = Path.cwd()
-        candidates.append(cwd / "docfill.py")
+        candidates.append(Path.cwd() / "docfill.py")
 
         for candidate in candidates:
             if candidate.is_file():
                 return str(candidate)
-
         return "docfill.py"
 
     def _build_ui(self) -> None:
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
-        self.rowconfigure(6, weight=0)
+        root = self.scroller.content
+        root.columnconfigure(0, weight=1)
 
-        top = ttk.Frame(self, padding=10)
-        top.grid(row=0, column=0, sticky="nsew")
+        top = ttk.Frame(root, padding=10)
+        top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(1, weight=1)
 
         ttk.Label(top, text="Python:").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
-        python_entry = ttk.Entry(top, textvariable=self.python_path_var)
-        python_entry.grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Entry(top, textvariable=self.python_path_var).grid(row=0, column=1, sticky="ew", pady=4)
         ttk.Button(top, text="Выбрать...", command=self._choose_python).grid(row=0, column=2, sticky="ew", padx=(8, 0), pady=4)
 
         ttk.Label(top, text="docfill.py:").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
-        docfill_entry = ttk.Entry(top, textvariable=self.docfill_path_var)
-        docfill_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Entry(top, textvariable=self.docfill_path_var).grid(row=1, column=1, sticky="ew", pady=4)
         ttk.Button(top, text="Выбрать...", command=self._choose_docfill).grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=4)
 
-        self.python_path_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.docfill_path_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.suffix_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.libre_office_exec_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.extra_args_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.verbose_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.check_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.ignore_case_var.trace_add("write", lambda *_: self._update_command_preview())
-        self.in_place_var.trace_add("write", lambda *_: self._update_command_preview())
-
-        files_frame = ttk.Frame(self, padding=(10, 0, 10, 0))
-        files_frame.grid(row=1, column=0, sticky="nsew")
+        files_frame = ttk.Frame(root, padding=(10, 0, 10, 0))
+        files_frame.grid(row=1, column=0, sticky="ew")
         files_frame.columnconfigure(0, weight=1)
         files_frame.columnconfigure(1, weight=1)
-        files_frame.rowconfigure(0, weight=1)
 
         self._build_file_list(
             parent=files_frame,
@@ -134,7 +155,7 @@ class DocfillLauncher(tk.Tk):
             attr_name="doc_listbox",
         )
 
-        options = ttk.LabelFrame(self, text="Параметры запуска", padding=10)
+        options = ttk.LabelFrame(root, text="Параметры запуска", padding=10)
         options.grid(row=2, column=0, sticky="ew", padx=10, pady=(10, 0))
         for idx in range(4):
             options.columnconfigure(idx, weight=1)
@@ -148,51 +169,33 @@ class DocfillLauncher(tk.Tk):
         ttk.Entry(options, textvariable=self.suffix_var).grid(row=1, column=1, sticky="ew", pady=(8, 2), padx=(0, 8))
 
         ttk.Label(options, text="--libreoffice-exec:").grid(row=1, column=2, sticky="w", pady=(8, 2))
-        ttk.Entry(options, textvariable=self.libre_office_exec_var).grid(row=1, column=3, sticky="ew", pady=(8, 2))
+        ttk.Entry(options, textvariable=self.libreoffice_exec_var).grid(row=1, column=3, sticky="ew", pady=(8, 2))
 
         ttk.Label(options, text="Дополнительные аргументы:").grid(row=2, column=0, sticky="w", pady=(8, 2))
         ttk.Entry(options, textvariable=self.extra_args_var).grid(row=2, column=1, columnspan=3, sticky="ew", pady=(8, 2))
 
-        preview_frame = ttk.LabelFrame(self, text="Команда", padding=10)
-        preview_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(10, 0))
-        preview_frame.columnconfigure(0, weight=1)
-        self.command_preview = tk.Text(preview_frame, height=3, wrap="word")
-        self.command_preview.grid(row=0, column=0, sticky="ew")
-        self.command_preview.configure(state="disabled")
-
-        output_frame = ttk.LabelFrame(self, text="Вывод", padding=10)
-        output_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(10, 0))
+        output_frame = ttk.LabelFrame(root, text="Вывод", padding=10)
+        output_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(10, 0))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
+
         self.output_text = tk.Text(output_frame, wrap="word", height=12)
         self.output_text.grid(row=0, column=0, sticky="nsew")
         output_scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.output_text.yview)
         output_scroll.grid(row=0, column=1, sticky="ns")
         self.output_text.configure(yscrollcommand=output_scroll.set)
 
-        buttons = ttk.Frame(self, padding=10)
-        buttons.grid(row=5, column=0, sticky="ew")
-        buttons.columnconfigure(0, weight=1)
+        bottom = ttk.Frame(root, padding=10)
+        bottom.grid(row=4, column=0, sticky="ew")
+        bottom.columnconfigure(1, weight=1)
 
-        left_buttons = ttk.Frame(buttons)
+        left_buttons = ttk.Frame(bottom)
         left_buttons.grid(row=0, column=0, sticky="w")
         ttk.Button(left_buttons, text="Запустить", command=self._start_run).pack(side="left")
         ttk.Button(left_buttons, text="Остановить", command=self._stop_run).pack(side="left", padx=(8, 0))
         ttk.Button(left_buttons, text="Очистить вывод", command=self._clear_output).pack(side="left", padx=(8, 0))
 
-        ttk.Label(buttons, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
-
-        hints = ttk.LabelFrame(self, text="Подсказки", padding=10)
-        hints.grid(row=6, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        hints.columnconfigure(0, weight=1)
-        hints.rowconfigure(0, weight=1)
-        hint_text = (
-            "• JSON-файлы должны иметь расширение .json.\n"
-            "• Документы распознаются по расширениям .doc, .docx и .odt.\n"
-            "• Для .doc может понадобиться LibreOffice.\n"
-            "• Этот launcher не меняет docfill.py, а просто запускает его с выбранными аргументами."
-        )
-        ttk.Label(hints, text=hint_text, justify="left").grid(row=0, column=0, sticky="nw")
+        ttk.Label(bottom, textvariable=self.status_var).grid(row=0, column=1, sticky="e")
 
     def _build_file_list(self, parent, column, title, add_command, remove_command, clear_command, attr_name):
         frame = ttk.LabelFrame(parent, text=title, padding=10)
@@ -200,10 +203,9 @@ class DocfillLauncher(tk.Tk):
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
 
-        listbox = tk.Listbox(frame, selectmode=tk.EXTENDED)
+        listbox = tk.Listbox(frame, selectmode=tk.EXTENDED, height=8)
         listbox.grid(row=0, column=0, sticky="nsew")
         setattr(self, attr_name, listbox)
-        listbox.bind("<<ListboxSelect>>", lambda _e: self._update_command_preview())
 
         scroll = ttk.Scrollbar(frame, orient="vertical", command=listbox.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -247,7 +249,6 @@ class DocfillLauncher(tk.Tk):
 
     def _add_paths(self, listbox: tk.Listbox, paths, required_suffix: str | None = None, required_suffixes: set[str] | None = None) -> None:
         existing = set(listbox.get(0, tk.END))
-        added_any = False
         rejected: list[str] = []
         for path in paths:
             suffix = Path(path).suffix.lower()
@@ -262,14 +263,11 @@ class DocfillLauncher(tk.Tk):
             if path not in existing:
                 listbox.insert(tk.END, path)
                 existing.add(path)
-                added_any = True
         if rejected:
             messagebox.showwarning(
                 "Неподдерживаемые файлы",
                 "Некоторые файлы были пропущены из-за неподдерживаемого расширения:\n\n" + "\n".join(rejected),
             )
-        if added_any:
-            self._update_command_preview()
 
     def _remove_selected(self, listbox: tk.Listbox) -> None:
         indices = list(listbox.curselection())
@@ -277,11 +275,9 @@ class DocfillLauncher(tk.Tk):
             return
         for idx in reversed(indices):
             listbox.delete(idx)
-        self._update_command_preview()
 
     def _clear_list(self, listbox: tk.Listbox) -> None:
         listbox.delete(0, tk.END)
-        self._update_command_preview()
 
     def _quote_for_preview(self, value: str) -> str:
         if platform.system().lower().startswith("win"):
@@ -320,7 +316,7 @@ class DocfillLauncher(tk.Tk):
         if suffix and suffix != ".rendered":
             cmd.extend(["--suffix", suffix])
 
-        libre_exec = self.libre_office_exec_var.get().strip()
+        libre_exec = self.libreoffice_exec_var.get().strip()
         if libre_exec:
             cmd.extend(["--libreoffice-exec", libre_exec])
 
@@ -365,17 +361,6 @@ class DocfillLauncher(tk.Tk):
             return False
         return True
 
-    def _update_command_preview(self) -> None:
-        try:
-            cmd = self._build_command()
-            preview = " ".join(self._quote_for_preview(part) for part in cmd)
-        except ValueError as exc:
-            preview = f"Ошибка в дополнительных аргументах: {exc}"
-        self.command_preview.configure(state="normal")
-        self.command_preview.delete("1.0", tk.END)
-        self.command_preview.insert("1.0", preview)
-        self.command_preview.configure(state="disabled")
-
     def _append_output(self, text: str) -> None:
         self.output_text.insert(tk.END, text)
         self.output_text.see(tk.END)
@@ -386,7 +371,8 @@ class DocfillLauncher(tk.Tk):
 
     def _set_running_state(self, running: bool) -> None:
         self.running = running
-        self.status_var.set("Выполняется..." if running else self.status_var.get())
+        if running:
+            self.status_var.set("Выполняется...")
 
     def _start_run(self) -> None:
         if self.running:
@@ -394,14 +380,15 @@ class DocfillLauncher(tk.Tk):
             return
         if not self._validate_before_run():
             return
+        try:
+            cmd = self._build_command()
+        except ValueError as exc:
+            messagebox.showerror("Ошибка", str(exc))
+            return
 
-        cmd = self._build_command()
         self._append_output("\n> " + " ".join(self._quote_for_preview(p) for p in cmd) + "\n\n")
-        self.status_var.set("Выполняется...")
         self._set_running_state(True)
-
-        thread = threading.Thread(target=self._run_subprocess, args=(cmd,), daemon=True)
-        thread.start()
+        threading.Thread(target=self._run_subprocess, args=(cmd,), daemon=True).start()
 
     def _run_subprocess(self, cmd: list[str]) -> None:
         try:
@@ -426,7 +413,7 @@ class DocfillLauncher(tk.Tk):
             self.process = None
 
     def _finish_run(self, returncode: int) -> None:
-        self._set_running_state(False)
+        self.running = False
         if returncode == 0:
             self.status_var.set("Готово. Команда завершилась успешно.")
             self._append_output("\n[launcher] Команда завершилась успешно.\n")
@@ -435,7 +422,7 @@ class DocfillLauncher(tk.Tk):
             self._append_output(f"\n[launcher] Команда завершилась с кодом {returncode}.\n")
 
     def _run_failed(self, message: str) -> None:
-        self._set_running_state(False)
+        self.running = False
         self.status_var.set("Ошибка запуска.")
         self._append_output(f"\n[launcher] {message}\n")
         messagebox.showerror("Ошибка", message)
