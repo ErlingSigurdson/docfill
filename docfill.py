@@ -618,7 +618,7 @@ def resolve_libreoffice_exec(user_value: str | None) -> str:
         "Для обработки файлов в формате DOC (как правило, имеют расширение '.doc') требуется LibreOffice.\n"
         "Программа не смогла автоматически найти запускаемый файл LibreOffice, "
         "необходимый для конвертации из DOC в DOCX.\n"
-        "Укажите путь к исполняемому файлу LibreOffice напрямую с помощью ключа --libreoffice-exec."
+        "Укажите путь к исполняемому файлу LibreOffice или его имя напрямую с помощью ключа --libreoffice-exec."
     )
 
 
@@ -692,8 +692,7 @@ def process_one_file(
     if ext == ".doc":
         if in_place:
             raise ValueError(
-                "Режим --in-place не поддерживается для DOC."
-                "Создаётся копия файла в формате DOCX."
+                "Опция --in-place не поддерживается для DOC."
             )
 
         temp_docx = convert_doc_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
