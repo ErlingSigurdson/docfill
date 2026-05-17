@@ -24,7 +24,7 @@ class DocfillLauncher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("docfill launcher")
-        self.minsize(980, 720)
+        self.minsize(840, 580)
 
         self.python_path_var = tk.StringVar(value=self._guess_python_executable())
         self.docfill_path_var = tk.StringVar(value=self._guess_docfill_script())
@@ -40,7 +40,24 @@ class DocfillLauncher(tk.Tk):
         self.process: subprocess.Popen[str] | None = None
 
         self._build_ui()
+        self._configure_window_geometry()
         self._update_command_preview()
+
+
+    def _configure_window_geometry(self) -> None:
+        self.update_idletasks()
+
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+
+        target_w = min(max(self.winfo_reqwidth() + 20, 900), max(640, int(screen_w * 0.92)))
+        target_h = min(max(self.winfo_reqheight() + 20, 620), max(480, int(screen_h * 0.85)))
+
+        x = max((screen_w - target_w) // 2, 0)
+        y = max((screen_h - target_h) // 3, 0)
+
+        self.maxsize(screen_w, screen_h)
+        self.geometry(f"{target_w}x{target_h}+{x}+{y}")
 
     def _guess_python_executable(self) -> str:
         return sys.executable or "python"
@@ -66,7 +83,7 @@ class DocfillLauncher(tk.Tk):
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
         self.rowconfigure(4, weight=1)
-        self.rowconfigure(6, weight=1)
+        self.rowconfigure(6, weight=0)
 
         top = ttk.Frame(self, padding=10)
         top.grid(row=0, column=0, sticky="nsew")
@@ -139,7 +156,7 @@ class DocfillLauncher(tk.Tk):
         preview_frame = ttk.LabelFrame(self, text="Команда", padding=10)
         preview_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(10, 0))
         preview_frame.columnconfigure(0, weight=1)
-        self.command_preview = tk.Text(preview_frame, height=4, wrap="word")
+        self.command_preview = tk.Text(preview_frame, height=3, wrap="word")
         self.command_preview.grid(row=0, column=0, sticky="ew")
         self.command_preview.configure(state="disabled")
 
@@ -147,7 +164,7 @@ class DocfillLauncher(tk.Tk):
         output_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(10, 0))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
-        self.output_text = tk.Text(output_frame, wrap="word")
+        self.output_text = tk.Text(output_frame, wrap="word", height=12)
         self.output_text.grid(row=0, column=0, sticky="nsew")
         output_scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.output_text.yview)
         output_scroll.grid(row=0, column=1, sticky="ns")
