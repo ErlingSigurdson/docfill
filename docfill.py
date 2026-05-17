@@ -569,6 +569,83 @@ def load_and_merge_replacements(json_paths: Sequence[Path]) -> Dict[str, str]:
 
     return merged
 
+
+def parse_alias_pairs(alias_values: Sequence[str]) -> List[tuple[str, str]]:
+    pairs: List[tuple[str, str]] = []
+
+    for raw_value in alias_values:
+        for item in raw_value.split(","):
+            item = item.strip()
+            if not item:
+                continue
+
+            if "=" not in item:
+                raise ValueError(
+                    "Некорректное значение опции --alias: "
+                    f"{raw_value!r}. Ожидается формат ИСХОДНОЕ=НОВОЕ[,ИСХОДНОЕ=НОВОЕ ...]."
+                )
+
+            source_prefix, alias_prefix = item.split("=", 1)
+            source_prefix = source_prefix.strip()
+            alias_prefix = alias_prefix.strip()
+
+            if not source_prefix or not alias_prefix:
+                raise ValueError(
+                    "Некорректное значение опции --alias: "
+                    f"{raw_value!r}. И исходное, и новое имя должны быть непустыми."
+                )
+
+            pairs.append((source_prefix, alias_prefix))
+
+    return pairs
+
+
+def apply_aliases(replacements: Mapping[str, str], alias_pairs: Sequence[tuple[str, str]]) -> Dict[str, str]:
+    if not alias_pairs:
+        return dict(replacements)
+
+    result: Dict[str, str] = dict(replacements)
+    source_of_placeholder: Dict[str, str] = {
+        placeholder: "JSON-файл"
+        for placeholder in result
+    }
+
+    for source_prefix, alias_prefix in alias_pairs:
+        matched_any = False
+
+        for placeholder, value in replacements.items():
+            if placeholder == source_prefix:
+                aliased_placeholder = alias_prefix
+            elif placeholder.startswith(source_prefix + "."):
+                aliased_placeholder = alias_prefix + placeholder[len(source_prefix):]
+            else:
+                continue
+
+            matched_any = True
+            existing_value = result.get(aliased_placeholder)
+            if existing_value is None:
+                result[aliased_placeholder] = value
+                source_of_placeholder[aliased_placeholder] = (
+                    f"alias {source_prefix!r} -> {alias_prefix!r}"
+                )
+                continue
+
+            if existing_value != value:
+                existing_source = source_of_placeholder.get(aliased_placeholder, "другой источник")
+                raise ValueError(
+                    "Обнаружен конфликт при применении опции --alias: "
+                    f"{aliased_placeholder!r} уже существует ({existing_source}) "
+                    f"и получает другое значение при alias {source_prefix!r} -> {alias_prefix!r}."
+                )
+
+        if not matched_any:
+            raise ValueError(
+                "Опция --alias ссылается на несуществующий префикс плейсхолдеров: "
+                f"{source_prefix!r}."
+            )
+
+    return result
+
 def guess_libreoffice_exec() -> str | None:
     candidates: List[str] = []
 
@@ -759,11 +836,12 @@ def make_parser() -> argparse.ArgumentParser:
         formatter_class=RussianHelpFormatter,
         usage=(
             "%(prog)s [--ignore-case] [--check] [-v|--verbose] [--suffix SUFFIX] "
-            "[--in-place] [--libreoffice-exec LIBREOFFICE_EXEC] target_file [target_file ...]"
+            "[--in-place] [--alias ALIAS] [--libreoffice-exec LIBREOFFICE_EXEC] "
+            "input_file [input_file ...]"
         ),
         description=(
-            "Подставляет значения из одного или нескольких JSON-файлов в один или несколько документов в формате DOCX, ODT или DOC.\n"
-            "JSON-файлы распознаются по расширению .json.\n"
+            "Подставляет значения из одного или нескольких JSON-файлов в один или несколько документов\n"
+            "в формате DOCX, ODT или DOC. JSON-файлы распознаются по расширению .json.\n"
         ),
     )
     parser.add_argument(
@@ -777,8 +855,8 @@ def make_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="input_file",
         help=(
-            "Один или несколько целевых файлов. JSON-файлы используются как источники\n"
-            "данных, а файлы .doc, .docx и .odt — как документы, в которых выполняется подстановка."
+            "Один или несколько целевых файлов. JSON-файлы используются как источники данных,\n"
+            "а целевые файлы .doc, .docx и .odt — как документы, в которых выполняется подстановка."
         ),
     )
     parser.add_argument(
@@ -817,6 +895,16 @@ def make_parser() -> argparse.ArgumentParser:
         help=(
             "Выполнять подстановку непосредственно в целевых файлах .docx и .odt, а не создавать для этого их копии. Для .doc\n"
             "не поддерживается."
+        ),
+    )
+
+    parser.add_argument(
+        "--alias",
+        action="append",
+        default=[],
+        metavar="SOURCE=TARGET[,SOURCE=TARGET ...]",
+        help=(
+            "Установить соответствия между полями JSON на время текущего запуска."
         ),
     )
     parser.add_argument(
@@ -877,6 +965,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         replacements = load_and_merge_replacements(json_paths)
+        alias_pairs = parse_alias_pairs(args.alias)
+        replacements = apply_aliases(replacements, alias_pairs)
         spec = build_replacement_spec(replacements, args.ignore_case)
     except Exception as exc:
         print(f"Ошибка подготовки плейсхолдеров: {exc}", file=sys.stderr)
