@@ -110,21 +110,21 @@ docfill может принимать на вход несколько JSON-фа
 
 Пример команды запуска:
 ```
-python docfill.py Ромашка_ООО.docfill.json Петров_П_П.docfill.json Условия_доверенности.docfill.json Доверенность1.docx
+python docfill.py Ромашка_ООО.docfill.json Петров_П_П.docfill.json Условия_доверенности.docfill.json Доверенность.docx
 ```
 
 ### Unix-подобные системы
 
 Пример команды запуска:
 ```bash
-python3 docfill.py Ромашка_ООО.docfill.json Петров_П_П.docfill.json Условия_доверенности.docfill.json Доверенность1.docx
+python3 docfill.py Ромашка_ООО.docfill.json Петров_П_П.docfill.json Условия_доверенности.docfill.json Доверенность.docx
 ```
 
 или, если заранее разрешить исполнение файла:
 
 ```bash
 chmod +x docfill.py
-./docfill.py Ромашка_ООО.docfill.json Петров_П_П.docfill.json Условия_доверенности.docfill.json Доверенность1.docx
+./docfill.py examples/Ромашка_ООО.docfill.json examples/Петров_П_П.docfill.json examples/Условия_доверенности.docfill.json examples/Доверенность.docx
 ```
 
 ## Вызов справки
