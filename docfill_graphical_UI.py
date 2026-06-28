@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 DOC_EXTENSIONS = {".doc", ".docx", ".odt", ".rtf"}
-JSON_EXTENSION = ".json"
+OBJECT_FILE_EXTENSIONS = {".json", ".yaml", ".yml"}
 
 
 class ScrollableFrame(ttk.Frame):
@@ -139,11 +139,11 @@ class DocfillLauncher(tk.Tk):
         self._build_file_list(
             parent=files_frame,
             column=0,
-            title="JSON-файлы",
-            add_command=self._add_json_files,
-            remove_command=lambda: self._remove_selected(self.json_listbox),
-            clear_command=lambda: self._clear_list(self.json_listbox),
-            attr_name="json_listbox",
+            title="Объектные файлы",
+            add_command=self._add_object_files,
+            remove_command=lambda: self._remove_selected(self.object_listbox),
+            clear_command=lambda: self._clear_list(self.object_listbox),
+            attr_name="object_listbox",
         )
         self._build_file_list(
             parent=files_frame,
@@ -233,12 +233,12 @@ class DocfillLauncher(tk.Tk):
         if path:
             self.docfill_path_var.set(path)
 
-    def _add_json_files(self) -> None:
+    def _add_object_files(self) -> None:
         paths = filedialog.askopenfilenames(
-            title="Выберите JSON-файлы",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            title="Выберите объектные файлы",
+            filetypes=[("Object files", "*.json *.yaml *.yml"), ("JSON files", "*.json"), ("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
         )
-        self._add_paths(self.json_listbox, paths, required_suffix=JSON_EXTENSION)
+        self._add_paths(self.object_listbox, paths, required_suffixes=OBJECT_FILE_EXTENSIONS)
 
     def _add_document_files(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -322,7 +322,7 @@ class DocfillLauncher(tk.Tk):
     def _build_command(self) -> list[str]:
         python_exec = self.python_path_var.get().strip() or self._guess_python_executable()
         docfill_script = self.docfill_path_var.get().strip() or self._guess_docfill_script()
-        json_files = list(self.json_listbox.get(0, tk.END))
+        object_files = list(self.object_listbox.get(0, tk.END))
         doc_files = list(self.doc_listbox.get(0, tk.END))
 
         cmd = [python_exec, docfill_script]
@@ -344,14 +344,14 @@ class DocfillLauncher(tk.Tk):
             cmd.extend(["--libreoffice-exec", libre_exec])
 
         cmd.extend(self._parse_extra_args())
-        cmd.extend(json_files)
+        cmd.extend(object_files)
         cmd.extend(doc_files)
         return cmd
 
     def _validate_before_run(self) -> bool:
         python_exec = self.python_path_var.get().strip()
         docfill_script = self.docfill_path_var.get().strip()
-        json_files = list(self.json_listbox.get(0, tk.END))
+        object_files = list(self.object_listbox.get(0, tk.END))
         doc_files = list(self.doc_listbox.get(0, tk.END))
 
         if not python_exec:
@@ -363,15 +363,15 @@ class DocfillLauncher(tk.Tk):
         if not Path(docfill_script).is_file():
             messagebox.showerror("Ошибка", f"Файл docfill.py не найден:\n{docfill_script}")
             return False
-        if not json_files:
-            messagebox.showerror("Ошибка", "Добавьте хотя бы один JSON-файл.")
+        if not object_files:
+            messagebox.showerror("Ошибка", "Добавьте хотя бы один объектный файл.")
             return False
         if not doc_files:
             messagebox.showerror("Ошибка", "Добавьте хотя бы один документ.")
             return False
-        for path in json_files:
-            if Path(path).suffix.lower() != JSON_EXTENSION:
-                messagebox.showerror("Ошибка", f"JSON-файл должен оканчиваться на .json:\n{path}")
+        for path in object_files:
+            if Path(path).suffix.lower() not in OBJECT_FILE_EXTENSIONS:
+                messagebox.showerror("Ошибка", f"Объектный файл должен оканчиваться на .json, .yaml или .yml:\n{path}")
                 return False
         for path in doc_files:
             if Path(path).suffix.lower() not in DOC_EXTENSIONS:

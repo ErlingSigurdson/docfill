@@ -19,6 +19,11 @@ from zipfile import ZipFile
 
 import xml.etree.ElementTree as ET
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 
 DOCX_NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -32,10 +37,12 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 XML_SPACE_ATTR = f"{{{XML_NS}}}space"
 
 JSON_EXTENSION = ".json"
+YAML_EXTENSIONS = {".yaml", ".yml"}
+OBJECT_FILE_EXTENSIONS = {JSON_EXTENSION} | YAML_EXTENSIONS
 NATIVE_DOCUMENT_EXTENSIONS = {".docx", ".odt"}
 CONVERTED_TO_DOCX_EXTENSIONS = {".doc", ".rtf"}
 DOCUMENT_EXTENSIONS = NATIVE_DOCUMENT_EXTENSIONS | CONVERTED_TO_DOCX_EXTENSIONS
-SUPPORTED_INPUT_EXTENSIONS = {JSON_EXTENSION} | DOCUMENT_EXTENSIONS
+SUPPORTED_INPUT_EXTENSIONS = OBJECT_FILE_EXTENSIONS | DOCUMENT_EXTENSIONS
 
 for prefix, uri in DOCX_NS.items():
     ET.register_namespace(prefix, uri)
@@ -146,7 +153,7 @@ def scalar_to_string(value) -> str:
     return str(value)
 
 
-def flatten_json(value, prefix: str = "") -> Dict[str, str]:
+def flatten_object(value, prefix: str = "") -> Dict[str, str]:
     result: Dict[str, str] = {}
 
     if isinstance(value, dict):
@@ -154,7 +161,7 @@ def flatten_json(value, prefix: str = "") -> Dict[str, str]:
             key_str = str(key)
             new_prefix = key_str if not prefix else f"{prefix}.{key_str}"
             if isinstance(item, (dict, list)):
-                result.update(flatten_json(item, new_prefix))
+                result.update(flatten_object(item, new_prefix))
             else:
                 result[new_prefix] = scalar_to_string(item)
         return result
@@ -163,7 +170,7 @@ def flatten_json(value, prefix: str = "") -> Dict[str, str]:
         for index, item in enumerate(value):
             new_prefix = str(index) if not prefix else f"{prefix}.{index}"
             if isinstance(item, (dict, list)):
-                result.update(flatten_json(item, new_prefix))
+                result.update(flatten_object(item, new_prefix))
             else:
                 result[new_prefix] = scalar_to_string(item)
         return result
@@ -546,42 +553,58 @@ def convert_doc_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
 
 
 
-def load_replacements(json_path: Path) -> Dict[str, str]:
-    with json_path.open("r", encoding="utf-8") as file:
-        data = json.load(file)
+def load_object_file(path: Path):
+    suffix = path.suffix.lower()
+    with path.open("r", encoding="utf-8") as file:
+        if suffix == JSON_EXTENSION:
+            return json.load(file)
 
-    replacements = flatten_json(data)
+        if suffix in YAML_EXTENSIONS:
+            if yaml is None:
+                raise ValueError(
+                    "Для чтения YAML-файлов требуется пакет PyYAML. "
+                    "Установите его командой: python -m pip install PyYAML"
+                )
+            return yaml.safe_load(file)
+
+    raise ValueError(f"Неподдерживаемый формат объектного файла: {path}")
+
+
+def load_replacements(object_path: Path) -> Dict[str, str]:
+    data = load_object_file(object_path)
+
+    replacements = flatten_object(data)
     if not replacements:
         raise ValueError(
-            f"В JSON-файле {json_path} не найдено скалярных значений для подстановки."
+            f"В объектном файле {object_path} не найдено скалярных значений для подстановки."
         )
 
     return replacements
 
 
-def load_and_merge_replacements(json_paths: Sequence[Path]) -> Dict[str, str]:
+def load_and_merge_replacements(object_paths: Sequence[Path]) -> Dict[str, str]:
     merged: Dict[str, str] = {}
     source_by_placeholder: Dict[str, Path] = {}
 
-    for json_path in json_paths:
-        replacements = load_replacements(json_path)
+    for object_path in object_paths:
+        replacements = load_replacements(object_path)
 
         for placeholder, value in replacements.items():
             existing_value = merged.get(placeholder)
             if existing_value is None:
                 merged[placeholder] = value
-                source_by_placeholder[placeholder] = json_path
+                source_by_placeholder[placeholder] = object_path
                 continue
 
             if existing_value != value:
                 first_source = source_by_placeholder[placeholder]
                 raise ValueError(
-                    "Обнаружен конфликт плейсхолдеров между JSON-файлами: "
-                    f"{placeholder!r} имеет разные значения в {first_source} и {json_path}."
+                    "Обнаружен конфликт плейсхолдеров между объектными файлами: "
+                    f"{placeholder!r} имеет разные значения в {first_source} и {object_path}."
                 )
 
     if not merged:
-        raise ValueError("Не найдено плейсхолдеров для подстановки ни в одном JSON-файле.")
+        raise ValueError("Не найдено плейсхолдеров для подстановки ни в одном объектном файле.")
 
     return merged
 
@@ -633,7 +656,7 @@ def apply_aliases(replacements: Mapping[str, str], alias_pairs: Sequence[tuple[s
 
     result: Dict[str, str] = dict(replacements)
     source_of_placeholder: Dict[str, str] = {
-        placeholder: "JSON-файл"
+        placeholder: "объектный файл"
         for placeholder in result
     }
 
@@ -867,8 +890,8 @@ def make_parser() -> argparse.ArgumentParser:
             "input_file [input_file ...]"
         ),
         description=(
-            "Подставляет значения из одного или нескольких JSON-файлов в один или несколько документов\n"
-            "в формате DOCX, ODT, DOC или RTF. JSON-файлы распознаются по расширению .json.\n"
+            "Подставляет значения из одного или нескольких объектных файлов в один или несколько документов\n"
+            "в формате DOCX, ODT, DOC или RTF. Объектные файлы распознаются по расширениям .json, .yaml и .yml.\n"
         ),
     )
     parser.add_argument(
@@ -882,7 +905,7 @@ def make_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="input_file",
         help=(
-            "Один или несколько целевых файлов. JSON-файлы используются как источники данных,\n"
+            "Один или несколько целевых файлов. Объектные файлы используются как источники данных,\n"
             "а целевые файлы .doc, .docx, .odt и .rtf — как документы, в которых выполняется подстановка."
         ),
     )
@@ -890,7 +913,7 @@ def make_parser() -> argparse.ArgumentParser:
         "--ignore-case",
         action="store_true",
         help=(
-            "Искать плейсхолдеры без учёта регистра. Если в JSON есть плейсхолдеры,\n"
+            "Искать плейсхолдеры без учёта регистра. Если в объектных файлах есть плейсхолдеры,\n"
             "отличающиеся только регистром, программа завершится с ошибкой."
         ),
     )
@@ -931,7 +954,7 @@ def make_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="SOURCE=TARGET[,SOURCE=TARGET ...]",
         help=(
-            "Установить соответствия между полями JSON на время текущего запуска."
+            "Установить соответствия между полями объектных файлов на время текущего запуска."
         ),
     )
     parser.add_argument(
@@ -953,7 +976,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     input_paths = [Path(item) for item in args.input_files]
-    json_paths = [path for path in input_paths if path.suffix.lower() == JSON_EXTENSION]
+    object_paths = [path for path in input_paths if path.suffix.lower() in OBJECT_FILE_EXTENSIONS]
     document_paths = [path for path in input_paths if path.suffix.lower() in DOCUMENT_EXTENSIONS]
     unsupported_paths = [
         path for path in input_paths
@@ -964,14 +987,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path in unsupported_paths:
             print(
                 f"Неподдерживаемый входной файл: {path}. "
-                "Поддерживаются только .json, .doc, .docx, .odt и .rtf.",
+                "Поддерживаются только .json, .yaml, .yml, .doc, .docx, .odt и .rtf.",
                 file=sys.stderr,
             )
         return 1
 
-    if not json_paths:
+    if not object_paths:
         print(
-            "Не указан ни один JSON-файл со значениями плейсхолдеров.",
+            "Не указан ни один объектный файл со значениями плейсхолдеров.",
             file=sys.stderr,
         )
         return 1
@@ -991,7 +1014,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
-        replacements = load_and_merge_replacements(json_paths)
+        replacements = load_and_merge_replacements(object_paths)
         alias_pairs = parse_alias_pairs(args.alias)
         replacements = apply_aliases(replacements, alias_pairs)
         spec = build_replacement_spec(replacements, args.ignore_case)
