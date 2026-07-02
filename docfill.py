@@ -43,6 +43,12 @@ NATIVE_DOCUMENT_EXTENSIONS = {".docx", ".odt"}
 CONVERTED_TO_DOCX_EXTENSIONS = {".doc", ".rtf"}
 DOCUMENT_EXTENSIONS = NATIVE_DOCUMENT_EXTENSIONS | CONVERTED_TO_DOCX_EXTENSIONS
 SUPPORTED_INPUT_EXTENSIONS = OBJECT_FILE_EXTENSIONS | DOCUMENT_EXTENSIONS
+PLACEHOLDER_CANDIDATE_PATTERN = re.compile(
+    r"(?<![А-ЯЁа-яёA-Za-z0-9_.])"
+    r"[А-ЯЁA-Z][А-ЯЁа-яёA-Za-z0-9_]*"
+    r"(?:\.[А-ЯЁA-Z][А-ЯЁа-яёA-Za-z0-9_]*)+"
+    r"(?![А-ЯЁа-яёA-Za-z0-9_.])"
+)
 
 for prefix, uri in DOCX_NS.items():
     ET.register_namespace(prefix, uri)
@@ -98,6 +104,7 @@ class ProcessReport:
     records: List[MatchInfo]
     found_counts: Counter[str]
     missing_placeholders: List[str]
+    unreplaced_placeholders: List[str]
 
 
 class RussianHelpFormatter(argparse.RawTextHelpFormatter):
@@ -344,6 +351,13 @@ def find_matches_in_slots(slots: Sequence[TextSlot], spec: ReplacementSpec) -> L
     return collect_matches(full_text, spec)
 
 
+def find_placeholder_candidates_in_slots(slots: Sequence[TextSlot]) -> List[str]:
+    if not slots:
+        return []
+    full_text = "".join(slot.get() for slot in slots)
+    return [match.group(0) for match in PLACEHOLDER_CANDIDATE_PATTERN.finditer(full_text)]
+
+
 def collect_docx_slots(paragraph: ET.Element) -> List[TextSlot]:
     slots: List[TextSlot] = []
     w_t = f"{{{DOCX_NS['w']}}}t"
@@ -403,6 +417,18 @@ def scan_docx_xml(xml_bytes: bytes, spec: ReplacementSpec) -> List[MatchInfo]:
     return records
 
 
+def scan_docx_xml_placeholder_candidates(xml_bytes: bytes) -> List[str]:
+    root = ET.fromstring(xml_bytes)
+    paragraph_tag = f"{{{DOCX_NS['w']}}}p"
+    candidates: List[str] = []
+
+    for paragraph in root.iter(paragraph_tag):
+        slots = collect_docx_slots(paragraph)
+        candidates.extend(find_placeholder_candidates_in_slots(slots))
+
+    return candidates
+
+
 def transform_odt_xml(xml_bytes: bytes, spec: ReplacementSpec) -> tuple[bytes, List[MatchInfo]]:
     register_namespaces_from_xml(xml_bytes)
     root = ET.fromstring(xml_bytes)
@@ -442,6 +468,22 @@ def scan_odt_xml(xml_bytes: bytes, spec: ReplacementSpec) -> List[MatchInfo]:
             records.extend(find_matches_in_slots(slots, spec))
 
     return records
+
+
+def scan_odt_xml_placeholder_candidates(xml_bytes: bytes) -> List[str]:
+    root = ET.fromstring(xml_bytes)
+    paragraph_tags = {
+        f"{{{ODT_NS['text']}}}p",
+        f"{{{ODT_NS['text']}}}h",
+    }
+    candidates: List[str] = []
+
+    for elem in root.iter():
+        if elem.tag in paragraph_tags:
+            slots = collect_odt_slots(elem)
+            candidates.extend(find_placeholder_candidates_in_slots(slots))
+
+    return candidates
 
 
 def rewrite_zip_package(
@@ -498,6 +540,25 @@ def scan_zip_package(src_path: Path, spec: ReplacementSpec, package_kind: str) -
                 raise ValueError(f"Unsupported package kind: {package_kind}")
 
     return all_records
+
+
+def scan_zip_package_placeholder_candidates(src_path: Path, package_kind: str) -> List[str]:
+    candidates: List[str] = []
+
+    with ZipFile(src_path, "r") as zin:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+
+            if package_kind == "docx":
+                if info.filename.startswith("word/") and info.filename.endswith(".xml"):
+                    candidates.extend(scan_docx_xml_placeholder_candidates(data))
+            elif package_kind == "odt":
+                if info.filename.endswith(".xml"):
+                    candidates.extend(scan_odt_xml_placeholder_candidates(data))
+            else:
+                raise ValueError(f"Unsupported package kind: {package_kind}")
+
+    return sorted(set(candidates))
 
 
 def convert_to_docx(src_path: Path, libreoffice_exec: str) -> Path:
@@ -761,7 +822,12 @@ def build_output_path(src_path: Path, suffix: str, in_place: bool, force_ext: st
     return src_path.with_name(f"{src_path.stem}{suffix}{src_path.suffix}")
 
 
-def build_process_report(output_path: Path | None, records: List[MatchInfo], spec: ReplacementSpec) -> ProcessReport:
+def build_process_report(
+    output_path: Path | None,
+    records: List[MatchInfo],
+    spec: ReplacementSpec,
+    unreplaced_placeholders: Sequence[str] | None = None,
+) -> ProcessReport:
     found_counts: Counter[str] = Counter(match.canonical_placeholder for match in records)
     missing_placeholders = [placeholder for placeholder in spec.all_placeholders if placeholder not in found_counts]
     return ProcessReport(
@@ -770,6 +836,7 @@ def build_process_report(output_path: Path | None, records: List[MatchInfo], spe
         records=records,
         found_counts=found_counts,
         missing_placeholders=missing_placeholders,
+        unreplaced_placeholders=sorted(set(unreplaced_placeholders or [])),
     )
 
 
@@ -778,17 +845,20 @@ def check_one_file(src_path: Path, spec: ReplacementSpec, libreoffice_exec: str 
 
     if ext == ".docx":
         records = scan_zip_package(src_path, spec, "docx")
-        return build_process_report(None, records, spec)
+        unreplaced = scan_zip_package_placeholder_candidates(src_path, "docx")
+        return build_process_report(None, records, spec, unreplaced)
 
     if ext == ".odt":
         records = scan_zip_package(src_path, spec, "odt")
-        return build_process_report(None, records, spec)
+        unreplaced = scan_zip_package_placeholder_candidates(src_path, "odt")
+        return build_process_report(None, records, spec, unreplaced)
 
     if ext in CONVERTED_TO_DOCX_EXTENSIONS:
         temp_docx = convert_to_docx(src_path, resolve_libreoffice_exec(libreoffice_exec))
         try:
             records = scan_zip_package(temp_docx, spec, "docx")
-            return build_process_report(None, records, spec)
+            unreplaced = scan_zip_package_placeholder_candidates(temp_docx, "docx")
+            return build_process_report(None, records, spec, unreplaced)
         finally:
             temp_docx.unlink(missing_ok=True)
 
@@ -809,12 +879,14 @@ def process_one_file(
     if ext == ".docx":
         dst_path = build_output_path(src_path, suffix, in_place)
         records = rewrite_zip_package(src_path, dst_path, spec, "docx")
-        return build_process_report(dst_path, records, spec)
+        unreplaced = scan_zip_package_placeholder_candidates(dst_path, "docx")
+        return build_process_report(dst_path, records, spec, unreplaced)
 
     if ext == ".odt":
         dst_path = build_output_path(src_path, suffix, in_place)
         records = rewrite_zip_package(src_path, dst_path, spec, "odt")
-        return build_process_report(dst_path, records, spec)
+        unreplaced = scan_zip_package_placeholder_candidates(dst_path, "odt")
+        return build_process_report(dst_path, records, spec, unreplaced)
 
     if ext in CONVERTED_TO_DOCX_EXTENSIONS:
         if in_place:
@@ -826,7 +898,8 @@ def process_one_file(
         try:
             dst_path = build_output_path(src_path, suffix, False, ".docx")
             records = rewrite_zip_package(temp_docx, dst_path, spec, "docx")
-            return build_process_report(dst_path, records, spec)
+            unreplaced = scan_zip_package_placeholder_candidates(dst_path, "docx")
+            return build_process_report(dst_path, records, spec, unreplaced)
         finally:
             temp_docx.unlink(missing_ok=True)
 
